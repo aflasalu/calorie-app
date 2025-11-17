@@ -1,10 +1,10 @@
 Activity,MET
-Walking, slow (2 mph),2.5
-Walking, brisk (3.5 mph),4.3
+"Walking, slow (2 mph)",2.5
+"Walking, brisk (3.5 mph)",4.3
 Jogging,7.0
 Running,10.0
-Cycling, easy,4.0
-Cycling, hard,8.5
+"Cycling, easy",4.0
+"Cycling, hard",8.5
 Elliptical trainer,5.0
 Strength training,6.0
 Yoga,2.5
