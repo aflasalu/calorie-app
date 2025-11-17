@@ -12,9 +12,16 @@ st.write("DEBUG: files here =", os.listdir())
 ACTIVITY_DF = None
 try:
     ACTIVITY_DF = pd.read_csv("activities.csv")
+
+    # ✅ Make sure MET is numeric and valid
+    ACTIVITY_DF["MET"] = pd.to_numeric(ACTIVITY_DF["MET"], errors="coerce")
+    ACTIVITY_DF = ACTIVITY_DF[ACTIVITY_DF["MET"].notna() & (ACTIVITY_DF["MET"] > 0)]
+
     st.sidebar.success("Activity lookup table found.")
 except FileNotFoundError:
+    ACTIVITY_DF = None
     st.sidebar.info("Add activities.csv to enable activity type classification & workout recommendations.")
+
 
 
 
@@ -306,24 +313,38 @@ target_kcal = st.slider(
 
 if ACTIVITY_DF is not None and weight > 0:
     rec_df = ACTIVITY_DF.copy()
-    # Minutes needed per activity to hit target_kcal
-    rec_df["Minutes_needed"] = target_kcal / (0.0175 * rec_df["MET"] * weight)
-    rec_df = rec_df.sort_values("Minutes_needed")
 
-    st.write("Estimated duration for each activity:")
-    st.dataframe(
-        rec_df[["Activity", "MET", "Minutes_needed"]]
-        .rename(columns={"Minutes_needed": "Minutes"})
-        .round({"Minutes": 1})
-    )
+    # ✅ Extra safety: ensure MET is numeric and valid
+    rec_df["MET"] = pd.to_numeric(rec_df["MET"], errors="coerce")
+    rec_df = rec_df[rec_df["MET"].notna() & (rec_df["MET"] > 0)]
 
-    st.markdown("**Quick options (shortest time):**")
-    for _, row in rec_df.head(3).iterrows():
-        st.write(
-            f"- **{row['Activity']}** → about **{row['Minutes_needed']:.1f} min**"
+    if not rec_df.empty:
+        # Minutes needed per activity to hit target_kcal
+        rec_df["Minutes_needed"] = target_kcal / (0.0175 * rec_df["MET"] * weight)
+
+        # Remove any infinite / NaN minutes
+        rec_df = rec_df.replace([np.inf, -np.inf], np.nan)
+        rec_df = rec_df.dropna(subset=["Minutes_needed"])
+
+        rec_df = rec_df.sort_values("Minutes_needed")
+
+        st.write("Estimated duration for each activity:")
+        st.dataframe(
+            rec_df[["Activity", "MET", "Minutes_needed"]]
+            .rename(columns={"Minutes_needed": "Minutes"})
+            .round({"Minutes": 1})
         )
+
+        st.markdown("**Quick options (shortest time):**")
+        for _, row in rec_df.head(3).iterrows():
+            st.write(
+                f"- **{row['Activity']}** → about **{row['Minutes_needed']:.1f} min**"
+            )
+    else:
+        st.info("No valid MET values found in activities.csv.")
 elif ACTIVITY_DF is None:
     st.info("Add activities.csv to see workout recommendations.")
+
 
 
 # ---------- Optional: show linear model coefficients if available ----------
@@ -340,5 +361,3 @@ except Exception:
 
 st.markdown("---")
 st.caption("Tip: If model/scaler are missing, upload them in the sidebar or place the .pkl files in the same folder as this app.")
-
-
