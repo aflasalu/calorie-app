@@ -299,48 +299,51 @@ if ACTIVITY_DF is not None and ml_prediction is not None and duration > 0 and we
     )
 
 
-
 # ---------- Workout Recommendations (Option C) ----------
 st.subheader("Workout recommendations")
-
 target_kcal = st.slider(
     "Target calories to burn",
     min_value=100,
     max_value=1000,
     value=300,
     step=50,
+    help="Estimated duration for each activity to reach this target."
 )
 
 if ACTIVITY_DF is not None and weight > 0:
+    # copy the lookup table
     rec_df = ACTIVITY_DF.copy()
 
-    # Clean MET values
+    # ensure MET is numeric and valid
     rec_df["MET"] = pd.to_numeric(rec_df["MET"], errors="coerce")
-    rec_df = rec_df.dropna(subset=["MET"])
-    rec_df = rec_df[rec_df["MET"] > 0]
+    rec_df = rec_df[rec_df["MET"].notna() & (rec_df["MET"] > 0)].copy()
 
-    # RECALCULATE minutes dynamically — reacts to user input
-    rec_df["Minutes"] = target_kcal / (0.0175 * rec_df["MET"] * weight)
+    if not rec_df.empty:
+        # Recalculate minutes dynamically using the current target_kcal and weight
+        # Minutes_needed = target_kcal / (0.0175 * MET * weight)
+        rec_df["Minutes_needed"] = target_kcal / (0.0175 * rec_df["MET"] * weight)
 
-    # Clean
-    rec_df = rec_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Minutes"])
-    rec_df = rec_df.sort_values("Minutes")
+        # remove infinite/NaN and rows where Minutes_needed can't be computed
+        rec_df = rec_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Minutes_needed"])
 
-    st.write("Estimated duration for each activity:")
-    st.dataframe(
-        rec_df[["Activity", "MET", "Minutes"]].round({"Minutes": 1})
-    )
+        # sort by minutes (shortest first)
+        rec_df = rec_df.sort_values("Minutes_needed")
 
+        st.write("Estimated duration for each activity:")
+        st.dataframe(
+            rec_df[["Activity", "MET", "Minutes_needed"]]
+            .rename(columns={"Minutes_needed": "Minutes"})
+            .round({"Minutes": 1})
+        )
 
         st.markdown("**Quick options (shortest time):**")
         for _, row in rec_df.head(3).iterrows():
-            st.write(
-                f"- **{row['Activity']}** → about **{row['Minutes_needed']:.1f} min**"
-            )
+            st.write(f"- **{row['Activity']}** → about **{row['Minutes_needed']:.1f} min**")
     else:
-        st.info("No valid MET values found in activities.csv.")
-elif ACTIVITY_DF is None:
+        st.info("No valid MET values found in activities file.")
+else:
     st.info("Add activities.csv to see workout recommendations.")
+
 
 
 
@@ -358,4 +361,5 @@ except Exception:
 
 st.markdown("---")
 st.caption("Tip: If model/scaler are missing, upload them in the sidebar or place the .pkl files in the same folder as this app.")
+
 
