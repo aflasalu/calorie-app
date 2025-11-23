@@ -224,45 +224,101 @@ if model is not None and scaler is not None and ml_prediction is not None:
     ax.grid(alpha=0.25)
     st.pyplot(fig)
 
-# Activity recommendations (MET based)
+# ---------- Workout recommendations (HR + MET combined) ----------
 st.subheader("Workout recommendations")
 target_kcal = st.slider("Target calories to burn", min_value=100, max_value=1000, value=300, step=50)
 
+def cal_per_min_from_hr(gender_str, hr, weight_kg, age):
+    # gender_str expected to be "Male"/"Female"/"Other"
+    try:
+        hr = float(hr); weight_kg = float(weight_kg); age = float(age)
+    except:
+        return None
+    g = (gender_str or "").strip().lower()
+    # Male formula
+    male = ((-55.0969 + (0.6309 * hr) + (0.1988 * weight_kg) + (0.2017 * age)) / 4.184)
+    # Female formula
+    female = ((-20.4022 + (0.4472 * hr) - (0.1263 * weight_kg) + (0.074 * age)) / 4.184)
+    if g.startswith('m'):
+        return max(male, 0.01)  # avoid zero/negative
+    if g.startswith('f'):
+        return max(female, 0.01)
+    # Other: average of both
+    return max((male + female) / 2.0, 0.01)
+
 if ACTIVITY_DF is not None and weight > 0:
     rec_df = ACTIVITY_DF.copy()
+
+    # ensure MET numeric
     rec_df["MET"] = pd.to_numeric(rec_df["MET"], errors="coerce")
     rec_df = rec_df.dropna(subset=["MET"])
-    rec_df = rec_df[rec_df["MET"] > 0]
-    rec_df["Minutes"] = target_kcal / (0.0175 * rec_df["MET"] * float(weight))
-    rec_df = rec_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Minutes"])
-    rec_df = rec_df.sort_values("Minutes")
-    st.write("Estimated duration for each activity:")
-    st.dataframe(rec_df[["Activity","MET","Minutes"]].round({"Minutes":1}).reset_index(drop=True))
-    st.markdown("**Quick options (shortest time):**")
-    for _, row in rec_df.head(3).iterrows():
-        st.write(f"- **{row['Activity']}** → about **{row['Minutes']:.1f} min**")
-    # Focus planner
+    rec_df = rec_df[rec_df["MET"] > 0].copy()
+
+    # MET-based minutes (original)
+    rec_df["Minutes_MET"] = target_kcal / (0.0175 * rec_df["MET"] * float(weight))
+
+    # HR-based minutes: compute calories per minute from HR formula, then minutes = target / cal_per_min
+    cal_per_min = cal_per_min_from_hr(gender, heart_rate, weight, age)
+    if cal_per_min is None or cal_per_min <= 0:
+        # if HR formula invalid, mark NaN
+        rec_df["Minutes_HR"] = np.nan
+    else:
+        # calories per minute predicted by HR formula is independent of activity MET,
+        # but we can use it as an overall per-minute burn for the user.
+        rec_df["Minutes_HR"] = target_kcal / cal_per_min
+
+    # Also compute calories-per-minute by MET (for comparison): cal/min = 0.0175 * MET * weight
+    rec_df["CalPerMin_MET"] = 0.0175 * rec_df["MET"] * float(weight)
+
+    # Clean infinite/invalid and round
+    rec_df = rec_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Minutes_MET"])  # keep MET rows valid
+    # Minutes_HR may be NaN (if hr formula invalid) — that's ok
+    rec_df = rec_df.sort_values(by=["Minutes_HR"], na_position="last")  # prefer HR ranking if available
+
+    # Easiest & Strongest by MET
+    easiest_row = rec_df.loc[rec_df["MET"].idxmin()] if not rec_df.empty else None
+    strongest_row = rec_df.loc[rec_df["MET"].idxmax()] if not rec_df.empty else None
+
+    st.write("Estimated duration for each activity (two methods):")
+    # Present both Minutes columns and calories-per-minute by MET
+    show_df = rec_df[["Activity", "MET", "CalPerMin_MET", "Minutes_MET", "Minutes_HR"]].copy()
+    show_df = show_df.rename(columns={
+        "CalPerMin_MET": "Calories_per_min_by_MET",
+        "Minutes_MET": "Minutes_by_MET",
+        "Minutes_HR": "Minutes_by_HR"
+    })
+    st.dataframe(show_df.round({"MET":2, "Calories_per_min_by_MET":2, "Minutes_by_MET":1, "Minutes_by_HR":1}).reset_index(drop=True))
+
+    # Quick options: shortest by HR if available, else by MET
+    st.markdown("**Quick options (shortest time)**")
+    if rec_df["Minutes_HR"].notna().any():
+        top3 = rec_df.nsmallest(3, "Minutes_HR")
+        for _, r in top3.iterrows():
+            st.write(f"- **{r['Activity']}** → about **{r['Minutes_HR']:.1f} min** (HR-based)")
+    else:
+        top3 = rec_df.nsmallest(3, "Minutes_MET")
+        for _, r in top3.iterrows():
+            st.write(f"- **{r['Activity']}** → about **{r['Minutes_MET']:.1f} min** (MET-based)")
+
+    # Focus planner (choose activity and show both estimates)
     st.markdown("### Focus on a single activity")
     focus_activity = st.selectbox("Choose activity", rec_df["Activity"].tolist())
     if focus_activity:
         r = rec_df.loc[rec_df["Activity"] == focus_activity].iloc[0]
-        st.info(f"To burn **{target_kcal} kcal** doing **{focus_activity}** (MET {r['MET']}), you need about **{r['Minutes']:.1f} minutes**.")
+        s = ""
+        s += f"**By MET:** {r['Minutes_MET']:.1f} min (cal/min {0.0175 * r['MET'] * float(weight):.2f})  \n"
+        if not np.isnan(r.get("Minutes_HR", np.nan)):
+            s += f"**By HR formula:** {r['Minutes_HR']:.1f} min (user HR method)  \n"
+        else:
+            s += "_HR-based estimate not available (invalid HR/inputs)._  \n"
+        st.info(s)
+
+    # Show easiest & strongest activities (MET-based)
+    st.markdown("### Easiest vs Strongest (by MET)")
+    if easiest_row is not None:
+        st.write(f"- **Easiest (lowest MET):** {easiest_row['Activity']} — MET {easiest_row['MET']:.1f}")
+    if strongest_row is not None:
+        st.write(f"- **Strongest (highest MET):** {strongest_row['Activity']} — MET {strongest_row['MET']:.1f}")
+
 else:
     st.info("Add activities.csv to see workout recommendations.")
-
-# Optional: show linear model coefficients if available
-try:
-    if hasattr(model, "coef_") and len(np.array(model.coef_).shape) == 1:
-        coefs = np.array(model.coef_).ravel()
-        coef_df = pd.DataFrame({"feature": FEATURES, "coef": coefs})
-        coef_df = coef_df.reindex(coef_df['coef'].abs().sort_values(ascending=False).index)
-        st.markdown("### Model coefficients (linear model)")
-        st.table(coef_df.style.format({"coef":"{:.3f}"}))
-except Exception:
-    pass
-
-st.markdown("---")
-st.caption("Tip: If model/scaler are missing, upload them in the sidebar or place the .pkl files in the same folder as this app.")
-
-
-
